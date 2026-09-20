@@ -1,0 +1,9 @@
+services:
+  gateway:
+    environment:
+      CODEX_PLUS_BOOTSTRAP_CREDENTIAL_FILE: /run/secrets/relay-bootstrap
+    volumes:
+      - type: bind
+        source: ./secrets/relay-bootstrap
+        target: /run/secrets/relay-bootstrap
+        read_only: true

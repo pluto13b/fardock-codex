@@ -1,0 +1,43 @@
+# Workspace-local runtime and caches
+.cache/
+.data/
+.tmp/
+.upstream/
+
+# Dependencies and builds
+node_modules/
+dist/
+build/
+coverage/
+output/
+.playwright-cli/
+.expo/
+*.tsbuildinfo
+.next/
+.vinext/
+.wrangler/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+auth.json
+credentials.json
+credentials/
+*.pem
+*.key
+*.p12
+*.pfx
+*.ppk
+id_rsa
+id_ed25519
+secrets/
+session-store/
+.sessions/
+
+# Logs and editor noise
+*.log
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

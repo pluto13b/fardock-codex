@@ -1,0 +1,20 @@
+packages:
+  - "apps/client"
+  - "apps/codex-web"
+  - "apps/windows-agent"
+  - "packages/codex-serve-client"
+  - "packages/e2ee"
+  - "packages/protocol"
+  - "services/relay"
+  - "packages/happy-wire"
+
+overrides:
+  whatwg-url: 14.2.0
+  parse-path: 7.0.3
+  "@types/parse-path": 7.0.3
+
+onlyBuiltDependencies:
+  - "@more-tech/react-native-libsodium"
+  - "@shopify/react-native-skia"
+  - esbuild
+  - sharp

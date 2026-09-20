@@ -1,0 +1,4 @@
+interface:
+  display_name: "FarDock 部署助手"
+  short_description: "Deploy FarDock with private configuration and verified checks"
+  default_prompt: "使用 $fardock-deploy，在我指定的 Windows 主机和 Docker 服务器部署 FarDock，保持配置私有并验证连接。"

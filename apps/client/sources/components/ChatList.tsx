@@ -1,0 +1,626 @@
+import * as React from 'react';
+import { useSession, useSessionMessages, useSetting } from "@/sync/storage";
+import { sync } from '@/sync/sync';
+import { ActivityIndicator, AppState, FlatList, NativeScrollEvent, NativeSyntheticEvent, Platform, Pressable, View } from 'react-native';
+import { useCallback } from 'react';
+import { useHeaderHeight } from '@/utils/responsive';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { MessageView } from './MessageView';
+import { AgentWorkGroupView, ToolGroupView } from './ToolGroupView';
+import { Metadata, Session } from '@/sync/storageTypes';
+import { ChatFooter } from './ChatFooter';
+import { Message } from '@/sync/typesMessage';
+import { DisplayItem, ToolGroupItem, useGroupedMessages } from '@/hooks/useGroupedMessages';
+import { Octicons } from '@expo/vector-icons';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { resolveControlMode } from '@/sync/controlHandoff';
+import { usesControlledSessionUi } from '@/sync/rig';
+import { ConversationMinimap } from './ConversationMinimap';
+import {
+    buildConversationMinimapAnchors,
+    type ConversationMinimapAnchor,
+} from './conversationMinimapModel';
+
+const SCROLL_THRESHOLD = 300;
+const DOCK_DETAILS_SHOW_OFFSET = 16;
+const DOCK_DETAILS_HIDE_OFFSET = 48;
+
+export const ChatList = React.memo((props: {
+    session: Session;
+    topContentInset?: number;
+    bottomContentInset?: number;
+    headerOverlayHeight?: number;
+    onHeaderBackdropVisibilityChange?: (visible: boolean) => void;
+    onBottomDockVisibilityChange?: (visible: boolean) => void;
+    turnNavigatorEnabled?: boolean;
+}) => {
+    const { messages, hasMoreOlder, isLoadingOlder } = useSessionMessages(props.session.id);
+    return (
+        <ChatListInternal
+            metadata={props.session.metadata}
+            sessionId={props.session.id}
+            messages={messages}
+            hasMoreOlder={hasMoreOlder}
+            isLoadingOlder={isLoadingOlder}
+            topContentInset={props.topContentInset}
+            bottomContentInset={props.bottomContentInset}
+            headerOverlayHeight={props.headerOverlayHeight}
+            onHeaderBackdropVisibilityChange={props.onHeaderBackdropVisibilityChange}
+            onBottomDockVisibilityChange={props.onBottomDockVisibilityChange}
+            turnNavigatorEnabled={props.turnNavigatorEnabled !== false}
+        />
+    )
+});
+
+const ListHeader = React.memo((props: { isLoadingOlder: boolean; topContentInset?: number }) => {
+    const headerHeight = useHeaderHeight();
+    const safeArea = useSafeAreaInsets();
+    // ListFooterComponent on an inverted FlatList renders at the visual top
+    // — that is exactly where the spinner for "loading older messages"
+    // belongs. The spacer below keeps the header bar from clipping the
+    // oldest message.
+    return (
+        <View>
+            {props.isLoadingOlder && (
+                <View style={{ paddingVertical: 12, alignItems: 'center', justifyContent: 'center' }}>
+                    <ActivityIndicator size="small" />
+                </View>
+            )}
+            <View
+                style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    height: props.topContentInset ?? headerHeight + safeArea.top + 32,
+                }}
+            />
+        </View>
+    );
+});
+
+const ListFooter = React.memo((props: { sessionId: string }) => {
+    const session = useSession(props.sessionId)!;
+    return (
+        <ChatFooter controlledByUser={usesControlledSessionUi(session.metadata) && (session.agentState?.controlledByUser || false)} />
+    )
+});
+
+const ChatListInternal = React.memo((props: {
+    metadata: Metadata | null,
+    sessionId: string,
+    messages: Message[],
+    hasMoreOlder: boolean,
+    isLoadingOlder: boolean,
+    topContentInset?: number,
+    bottomContentInset?: number,
+    headerOverlayHeight?: number,
+    onHeaderBackdropVisibilityChange?: (visible: boolean) => void,
+    onBottomDockVisibilityChange?: (visible: boolean) => void,
+    turnNavigatorEnabled: boolean,
+}) => {
+    const { theme } = useUnistyles();
+    const flatListRef = React.useRef<FlatList>(null);
+    const [showScrollButton, setShowScrollButton] = React.useState(false);
+    const [listWidth, setListWidth] = React.useState(0);
+    const [handoffListRevision, setHandoffListRevision] = React.useState(0);
+    // Tracks whether the scroll-button is currently shown, so we only call
+    // setShowScrollButton when the threshold is actually crossed instead of
+    // on every scroll frame (60Hz). Without this guard, the entire list
+    // parent re-renders on every wheel tick.
+    const showScrollButtonRef = React.useRef(false);
+    const headerBackdropVisibleRef = React.useRef(false);
+    const bottomDockVisibleRef = React.useRef(true);
+    // Native auto-stick-to-bottom also emits scroll events. Only a drag that
+    // began with the user may change the auxiliary dock's visibility.
+    const isUserScrollingRef = React.useRef(false);
+    const scrollMetricsRef = React.useRef({
+        offsetY: 0,
+        contentHeight: 0,
+        viewportHeight: 0,
+    });
+    const session = useSession(props.sessionId);
+    const controlMode = resolveControlMode(usesControlledSessionUi(session?.metadata) ? session?.agentState?.controlledByUser : false);
+    const previousControlModeRef = React.useRef(controlMode);
+
+    React.useEffect(() => {
+        if (previousControlModeRef.current === controlMode) {
+            return;
+        }
+        previousControlModeRef.current = controlMode;
+        if (Platform.OS !== 'web') {
+            return;
+        }
+        if (showScrollButtonRef.current) {
+            showScrollButtonRef.current = false;
+            setShowScrollButton(false);
+        }
+        setHandoffListRevision((revision) => revision + 1);
+    }, [controlMode]);
+
+    // Collapse agent work between a user prompt and the final answer.
+    // Nested tool groups remain expandable inside the work block.
+    const groupToolCalls = useSetting('groupToolCalls');
+    const hasPendingPermission = Boolean(
+        session?.agentState?.requests && Object.keys(session.agentState.requests).length > 0,
+    );
+    const collapseCurrentTurn = session?.thinking !== true && !hasPendingPermission;
+    const groupingOptions = React.useMemo(
+        () => ({ collapseCurrentTurn }),
+        [collapseCurrentTurn],
+    );
+    const displayItems = useGroupedMessages(props.messages, groupToolCalls, groupingOptions);
+
+    // Tracks which groups are explicitly collapsed. Groups start collapsed;
+    // pending approval groups are the only ones we auto-expand.
+    const [collapsedGroups, setCollapsedGroups] = React.useState<Set<string>>(() => {
+        const initial = new Set<string>();
+        for (const item of displayItems) {
+            if (isCollapsibleDisplayItem(item) && !item.hasPendingPermission) {
+                initial.add(item.id);
+            }
+        }
+        return initial;
+    });
+
+    // Auto-expand groups that need user approval — but only if the user
+    // hasn't manually collapsed them.
+    // We track manually-collapsed IDs so we never force-reopen them.
+    const manuallyCollapsedRef = React.useRef<Set<string>>(new Set());
+    const initialSeenCollapsibleGroups = React.useMemo(() => {
+        const initial = new Set<string>();
+        for (const item of displayItems) {
+            if (isCollapsibleDisplayItem(item)) {
+                initial.add(item.id);
+            }
+        }
+        return initial;
+    }, []);
+    const seenCollapsibleGroupsRef = React.useRef<Set<string>>(initialSeenCollapsibleGroups);
+
+    React.useEffect(() => {
+        setCollapsedGroups((prev) => {
+            let changed = false;
+            const next = new Set(prev);
+            const seen = seenCollapsibleGroupsRef.current;
+            for (const item of displayItems) {
+                if (!isCollapsibleDisplayItem(item)) {
+                    continue;
+                }
+                const isNewGroup = !seen.has(item.id);
+                if (isNewGroup) {
+                    seen.add(item.id);
+                }
+                if (item.hasPendingPermission && prev.has(item.id) && !manuallyCollapsedRef.current.has(item.id)) {
+                    next.delete(item.id);
+                    changed = true;
+                    continue;
+                }
+                if (isNewGroup && !item.hasPendingPermission) {
+                    next.add(item.id);
+                    changed = true;
+                }
+            }
+            return changed ? next : prev;
+        });
+    }, [displayItems]);
+
+    // Ref so AppState handler reads fresh items without re-subscribing
+    const displayItemsRef = React.useRef(displayItems);
+    displayItemsRef.current = displayItems;
+    const minimapAnchors = React.useMemo(
+        () => buildConversationMinimapAnchors(displayItems),
+        [displayItems],
+    );
+    const pendingMinimapJumpRef = React.useRef<{ messageId: string; attempts: number } | null>(null);
+    const minimapRetryTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const clearMinimapRetry = useCallback(() => {
+        if (minimapRetryTimerRef.current) {
+            clearTimeout(minimapRetryTimerRef.current);
+            minimapRetryTimerRef.current = null;
+        }
+    }, []);
+
+    const resolveMinimapDisplayIndex = useCallback((messageId: string): number => (
+        displayItemsRef.current.findIndex((item) => (
+            item.type === 'message'
+            && item.message.kind === 'user-text'
+            && item.message.id === messageId
+        ))
+    ), []);
+
+    const jumpToMinimapAnchor = useCallback((anchor: ConversationMinimapAnchor) => {
+        clearMinimapRetry();
+        const index = resolveMinimapDisplayIndex(anchor.messageId);
+        if (index < 0) return;
+        pendingMinimapJumpRef.current = { messageId: anchor.messageId, attempts: 0 };
+        flatListRef.current?.scrollToIndex({
+            index,
+            animated: true,
+            viewPosition: 0.5,
+        });
+    }, [clearMinimapRetry, resolveMinimapDisplayIndex]);
+
+    const handleScrollToIndexFailed = useCallback((info: {
+        index: number;
+        highestMeasuredFrameIndex: number;
+        averageItemLength: number;
+    }) => {
+        const pending = pendingMinimapJumpRef.current;
+        if (!pending || pending.attempts >= 3) {
+            pendingMinimapJumpRef.current = null;
+            return;
+        }
+        const index = resolveMinimapDisplayIndex(pending.messageId);
+        if (index < 0) {
+            pendingMinimapJumpRef.current = null;
+            return;
+        }
+
+        pending.attempts += 1;
+        flatListRef.current?.scrollToOffset({
+            offset: Math.max(0, info.averageItemLength * index),
+            animated: false,
+        });
+        clearMinimapRetry();
+        minimapRetryTimerRef.current = setTimeout(() => {
+            const latestPending = pendingMinimapJumpRef.current;
+            if (!latestPending) return;
+            const latestIndex = resolveMinimapDisplayIndex(latestPending.messageId);
+            if (latestIndex < 0) {
+                pendingMinimapJumpRef.current = null;
+                return;
+            }
+            flatListRef.current?.scrollToIndex({
+                index: latestIndex,
+                animated: false,
+                viewPosition: 0.5,
+            });
+        }, 120);
+    }, [clearMinimapRetry, resolveMinimapDisplayIndex]);
+
+    React.useEffect(() => () => {
+        clearMinimapRetry();
+        pendingMinimapJumpRef.current = null;
+    }, [clearMinimapRetry, props.sessionId]);
+
+    // Auto-collapse completed groups when app goes to background / tab hidden
+    React.useEffect(() => {
+        const sub = AppState.addEventListener('change', (state) => {
+            if (state !== 'active') {
+                setCollapsedGroups((prev) => {
+                    const next = new Set(prev);
+                    for (const item of displayItemsRef.current) {
+                        if (isCollapsibleDisplayItem(item) && !item.hasRunning) {
+                            next.add(item.id);
+                        }
+                    }
+                    return next;
+                });
+            }
+        });
+        return () => sub.remove();
+    }, []);
+
+    // Auto-collapse all previous groups when user sends a new message
+    const latestUserMsgId = React.useMemo(() => {
+        for (const msg of props.messages) {
+            if (msg.kind === 'user-text') return msg.id;
+        }
+        return null;
+    }, [props.messages]);
+
+    const prevUserMsgIdRef = React.useRef(latestUserMsgId);
+    React.useEffect(() => {
+        if (latestUserMsgId && latestUserMsgId !== prevUserMsgIdRef.current) {
+            prevUserMsgIdRef.current = latestUserMsgId;
+            manuallyCollapsedRef.current.clear();
+            setCollapsedGroups((prev) => {
+                const next = new Set(prev);
+                for (const item of displayItemsRef.current) {
+                    if (isCollapsibleDisplayItem(item)) {
+                        next.add(item.id);
+                    }
+                }
+                return next;
+            });
+        }
+    }, [latestUserMsgId]);
+
+    const handleToggleGroup = useCallback((groupId: string) => {
+        setCollapsedGroups((prev) => {
+            const next = new Set(prev);
+            if (next.has(groupId)) {
+                next.delete(groupId);
+                manuallyCollapsedRef.current.delete(groupId);
+            } else {
+                next.add(groupId);
+                manuallyCollapsedRef.current.add(groupId);
+            }
+            return next;
+        });
+    }, []);
+
+    const keyExtractor = useCallback((item: DisplayItem) => item.id, []);
+
+    const updateHeaderBackdropVisibility = useCallback(() => {
+        if (!props.onHeaderBackdropVisibilityChange || !props.headerOverlayHeight) {
+            return;
+        }
+        const { offsetY, contentHeight, viewportHeight } = scrollMetricsRef.current;
+        const topSpacerHeight = props.topContentInset ?? 0;
+        const nonSpacerContentHeight = Math.max(
+            0,
+            contentHeight - topSpacerHeight - (props.bottomContentInset ?? 0),
+        );
+        const nextVisible = viewportHeight > 0
+            && nonSpacerContentHeight > offsetY + viewportHeight - props.headerOverlayHeight;
+        if (nextVisible === headerBackdropVisibleRef.current) {
+            return;
+        }
+        headerBackdropVisibleRef.current = nextVisible;
+        props.onHeaderBackdropVisibilityChange(nextVisible);
+    }, [props.bottomContentInset, props.headerOverlayHeight, props.onHeaderBackdropVisibilityChange, props.topContentInset]);
+
+    const setBottomDockVisibility = useCallback((visible: boolean) => {
+        if (!props.onBottomDockVisibilityChange) {
+            return;
+        }
+        if (visible === bottomDockVisibleRef.current) {
+            return;
+        }
+        bottomDockVisibleRef.current = visible;
+        props.onBottomDockVisibilityChange(visible);
+    }, [props.onBottomDockVisibilityChange]);
+
+    const updateBottomDockVisibility = useCallback((offsetY: number) => {
+        // Treat this as a user-scroll state. Hysteresis avoids toggling while
+        // the list is resting or bouncing very near the newest message.
+        const nextVisible = bottomDockVisibleRef.current
+            ? offsetY <= DOCK_DETAILS_HIDE_OFFSET
+            : offsetY <= DOCK_DETAILS_SHOW_OFFSET;
+        setBottomDockVisibility(nextVisible);
+    }, [setBottomDockVisibility]);
+
+    React.useEffect(() => {
+        isUserScrollingRef.current = false;
+        setBottomDockVisibility(true);
+    }, [props.sessionId, setBottomDockVisibility]);
+
+    React.useEffect(() => () => {
+        if (headerBackdropVisibleRef.current) {
+            props.onHeaderBackdropVisibilityChange?.(false);
+        }
+        setBottomDockVisibility(true);
+    }, [props.onHeaderBackdropVisibilityChange, setBottomDockVisibility]);
+
+    const renderItem = useCallback(({ item }: { item: DisplayItem }) => {
+        if (item.type === 'tool-group') {
+            return (
+                <ToolGroupView
+                    group={item}
+                    metadata={props.metadata}
+                    sessionId={props.sessionId}
+                    expanded={!collapsedGroups.has(item.id)}
+                    onToggle={() => handleToggleGroup(item.id)}
+                />
+            );
+        }
+        if (item.type === 'agent-work-group') {
+            return (
+                <AgentWorkGroupView
+                    group={item}
+                    metadata={props.metadata}
+                    sessionId={props.sessionId}
+                    expanded={!collapsedGroups.has(item.id)}
+                    onToggle={() => handleToggleGroup(item.id)}
+                />
+            );
+        }
+        return (
+            <MessageView
+                message={item.message}
+                metadata={props.metadata}
+                sessionId={props.sessionId}
+            />
+        );
+    }, [props.metadata, props.sessionId, collapsedGroups, handleToggleGroup]);
+
+    // In inverted FlatList, offset 0 = latest messages (visual bottom).
+    // Offset increases as user scrolls up to see older messages.
+    // Auto-stick-to-bottom on new messages is handled natively by FlatList's
+    // maintainVisibleContentPosition.autoscrollToBottomThreshold — no JS-side
+    // scrollToOffset is needed (and running both produces a fight that drags
+    // the user's viewport when reading older messages mid-stream).
+    const handleScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+        const offsetY = e.nativeEvent.contentOffset.y;
+        scrollMetricsRef.current.offsetY = offsetY;
+        updateHeaderBackdropVisibility();
+        if (isUserScrollingRef.current) {
+            updateBottomDockVisibility(offsetY);
+        }
+        const next = offsetY > SCROLL_THRESHOLD;
+        if (next !== showScrollButtonRef.current) {
+            showScrollButtonRef.current = next;
+            setShowScrollButton(next);
+        }
+    }, [updateBottomDockVisibility, updateHeaderBackdropVisibility]);
+
+    const handleScrollBeginDrag = useCallback(() => {
+        isUserScrollingRef.current = true;
+    }, []);
+
+    const handleScrollEndDrag = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+        if (!isUserScrollingRef.current) {
+            return;
+        }
+        updateBottomDockVisibility(e.nativeEvent.contentOffset.y);
+        if (Math.abs(e.nativeEvent.velocity?.y ?? 0) < 0.1) {
+            isUserScrollingRef.current = false;
+        }
+    }, [updateBottomDockVisibility]);
+
+    const handleMomentumScrollEnd = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+        if (!isUserScrollingRef.current) {
+            return;
+        }
+        updateBottomDockVisibility(e.nativeEvent.contentOffset.y);
+        isUserScrollingRef.current = false;
+    }, [updateBottomDockVisibility]);
+
+    const scrollToBottom = useCallback(() => {
+        // This is an explicit "go to latest" action, so its animated native
+        // scroll should restore the dock even though it is not a drag.
+        setBottomDockVisibility(true);
+        flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+    }, [setBottomDockVisibility]);
+
+    // In an inverted FlatList, `onEndReached` fires when the user scrolls
+    // past the visual top — i.e. when they want to see older history.
+    // Initial fetch only loads the latest 100 messages (see
+    // sync.fetchInitialLatestPage), so we lazy-load earlier pages here.
+    const sessionId = props.sessionId;
+    const hasMoreOlder = props.hasMoreOlder;
+    const isLoadingOlder = props.isLoadingOlder;
+    const handleLoadOlder = useCallback(() => {
+        if (!hasMoreOlder || isLoadingOlder) return;
+        void sync.loadOlderMessages(sessionId);
+    }, [sessionId, hasMoreOlder, isLoadingOlder]);
+
+    // On macOS/web, Shift+wheel swaps deltaX/deltaY — restore vertical scrolling
+    React.useEffect(() => {
+        if (Platform.OS !== 'web') return;
+        const node = (flatListRef.current as any)?.getScrollableNode?.() as HTMLElement | undefined;
+        if (!node) return;
+        const handler = (e: WheelEvent) => {
+            if (e.shiftKey && Math.abs(e.deltaX) > 0 && Math.abs(e.deltaY) < 1) {
+                node.scrollTop += e.deltaX;
+                e.preventDefault();
+            }
+        };
+        node.addEventListener('wheel', handler, { passive: false });
+        return () => node.removeEventListener('wheel', handler);
+    }, []);
+
+    return (
+        <View style={{ flex: 1 }}>
+            <FlatList
+                key={`${props.sessionId}:${handoffListRevision}`}
+                ref={flatListRef}
+                data={displayItems}
+                inverted={true}
+                keyExtractor={keyExtractor}
+                maintainVisibleContentPosition={{
+                    // Anchor on the second-newest message (index 1), not the
+                    // newest. The newest slot (index 0) gets a brand-new item
+                    // each agent token, which would otherwise destabilise the
+                    // anchor and drag the viewport up.
+                    //
+                    // autoscrollToTopThreshold: for INVERTED lists this is
+                    // actually the auto-stick-to-visual-bottom threshold —
+                    // contentOffset 0 is at the visual bottom in an inverted
+                    // list, and this prop sticks the viewport to offset 0
+                    // when the user is within N units of it.
+                    minIndexForVisible: 1,
+                    autoscrollToTopThreshold: 50,
+                }}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'none'}
+                // Inverted list: paddingTop renders at the visual bottom.
+                // The measured dock inset lets the newest message scroll above
+                // the floating composer instead of stopping underneath it.
+                contentContainerStyle={{ paddingTop: 8 + (props.bottomContentInset ?? 0) }}
+                renderItem={renderItem}
+                onScroll={handleScroll}
+                onScrollBeginDrag={handleScrollBeginDrag}
+                onScrollEndDrag={handleScrollEndDrag}
+                onMomentumScrollEnd={handleMomentumScrollEnd}
+                scrollEventThrottle={16}
+                onLayout={(event) => {
+                    setListWidth((current) => current === event.nativeEvent.layout.width
+                        ? current
+                        : event.nativeEvent.layout.width);
+                    scrollMetricsRef.current.viewportHeight = event.nativeEvent.layout.height;
+                    updateHeaderBackdropVisibility();
+                }}
+                onContentSizeChange={(_width, height) => {
+                    scrollMetricsRef.current.contentHeight = height;
+                    updateHeaderBackdropVisibility();
+                }}
+                ListHeaderComponent={<ListFooter sessionId={props.sessionId} />}
+                ListFooterComponent={(
+                    <ListHeader
+                        isLoadingOlder={props.isLoadingOlder}
+                        topContentInset={props.topContentInset}
+                    />
+                )}
+                onEndReached={handleLoadOlder}
+                onEndReachedThreshold={0.5}
+                onScrollToIndexFailed={handleScrollToIndexFailed}
+            />
+            {props.turnNavigatorEnabled && (
+                <ConversationMinimap
+                    key={props.sessionId}
+                    anchors={minimapAnchors}
+                    contentWidth={listWidth}
+                    topInset={props.topContentInset ?? 48}
+                    bottomInset={props.bottomContentInset ?? 0}
+                    onJump={jumpToMinimapAnchor}
+                />
+            )}
+            {showScrollButton && (
+                <View style={[
+                    styles.scrollButtonContainer,
+                    { bottom: 12 + (props.bottomContentInset ?? 0) },
+                ]}>
+                    <Pressable
+                        style={({ pressed }) => [
+                            styles.scrollButton,
+                            pressed ? styles.scrollButtonPressed : styles.scrollButtonDefault
+                        ]}
+                        onPress={scrollToBottom}
+                    >
+                        <Octicons name="arrow-down" size={14} color={theme.colors.text} />
+                    </Pressable>
+                </View>
+            )}
+        </View>
+    )
+});
+
+function isCollapsibleDisplayItem(item: DisplayItem): item is ToolGroupItem | Extract<DisplayItem, { type: 'agent-work-group' }> {
+    return item.type === 'tool-group' || item.type === 'agent-work-group';
+}
+
+const styles = StyleSheet.create((theme) => ({
+    scrollButtonContainer: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        bottom: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+        pointerEvents: 'box-none',
+    },
+    scrollButton: {
+        borderRadius: 16,
+        width: 32,
+        height: 32,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1,
+        borderColor: theme.colors.divider,
+        shadowColor: theme.colors.shadow.color,
+        shadowOffset: { width: 0, height: 1 },
+        shadowRadius: 2,
+        shadowOpacity: theme.colors.shadow.opacity * 0.5,
+        elevation: 2,
+    },
+    scrollButtonDefault: {
+        backgroundColor: theme.colors.surface,
+        opacity: 0.9,
+    },
+    scrollButtonPressed: {
+        backgroundColor: theme.colors.surface,
+        opacity: 0.7,
+    },
+}));

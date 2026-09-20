@@ -1,0 +1,35 @@
+{
+  "name": "@codex-plus/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "dev:preview": "vite --mode preview --host 127.0.0.1",
+    "build": "tsc -b && vite build",
+    "build:preview": "tsc -b && vite build --mode preview",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "preview": "vite preview --host 127.0.0.1",
+    "preview:fixture": "vite preview --mode preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@codex-plus/e2ee": "workspace:*",
+    "@codex-plus/protocol": "workspace:*",
+    "@codex-plus/serve-client": "workspace:*",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  },
+  "devDependencies": {
+    "@codex-plus/relay": "workspace:*",
+    "@types/node": "26.2.0",
+    "@types/react": "~19.1.10",
+    "@types/react-dom": "~19.1.7",
+    "@types/ws": "8.18.1",
+    "@vitejs/plugin-react": "4.7.0",
+    "typescript": "5.9.3",
+    "vite": "6.1.0",
+    "vitest": "3.2.7",
+    "ws": "8.21.3"
+  }
+}

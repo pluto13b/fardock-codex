@@ -1,0 +1,56 @@
+services:
+  gateway:
+    image: ${CODEX_PLUS_GATEWAY_IMAGE:?set CODEX_PLUS_GATEWAY_IMAGE}
+    container_name: codex-plus-gateway
+    restart: unless-stopped
+    init: true
+    user: "10001:10001"
+    read_only: true
+
+    ports:
+      - "127.0.0.1:8787:8787"
+
+    environment:
+      CODEX_PLUS_MODE: production
+      CODEX_PLUS_BIND: 0.0.0.0
+      CODEX_PLUS_PORT: "8787"
+      CODEX_PLUS_PUBLIC_ORIGIN: ${CODEX_PLUS_PUBLIC_ORIGIN:?set CODEX_PLUS_PUBLIC_ORIGIN}
+      CODEX_PLUS_TRUSTED_PROXY_IPS: ${CODEX_PLUS_TRUSTED_PROXY_IPS:?set CODEX_PLUS_TRUSTED_PROXY_IPS}
+      CODEX_PLUS_STATE_FILE: /var/lib/codex-plus/relay-state.json
+      CODEX_PLUS_WEB_ROOT: /opt/codex-plus/web
+      CODEX_PLUS_OWNER_VERIFIER_FILE: /run/secrets/codex-plus-owner-verifier
+      CODEX_PLUS_LOG_LEVEL: ${CODEX_PLUS_LOG_LEVEL:-info}
+
+    volumes:
+      - type: bind
+        source: ./data
+        target: /var/lib/codex-plus
+      - type: bind
+        source: ./secrets/owner-verifier.json
+        target: /run/secrets/codex-plus-owner-verifier
+        read_only: true
+
+    tmpfs:
+      - /tmp:size=16m,mode=1770,noexec,nosuid,nodev,uid=10001,gid=10001
+
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8787/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

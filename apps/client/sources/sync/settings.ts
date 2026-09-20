@@ -1,0 +1,232 @@
+import * as z from 'zod';
+import { AgentDefaultOverridesSchema, resolveCodexRemotePermissionMode } from './agentDefaults';
+import { DEFAULT_USER_MESSAGE_BUBBLE_COLOR } from '../utils/userMessageBubbleColor';
+
+//
+// Settings Schema
+//
+
+// Current schema version for backward compatibility
+export const SUPPORTED_SCHEMA_VERSION = 2;
+
+// Where (and whether) the branch/model/effort/context status bar renders
+// around the composer.
+export const SESSION_STATUS_BAR_DISPLAY_MODES = ['hidden', 'above', 'below'] as const;
+export type SessionStatusBarDisplay = typeof SESSION_STATUS_BAR_DISPLAY_MODES[number];
+
+export const SettingsSchema = z.object({
+    // Schema version for compatibility detection
+    schemaVersion: z.number().default(SUPPORTED_SCHEMA_VERSION).describe('Settings schema version for compatibility checks'),
+
+    viewInline: z.boolean().describe('Whether to view inline tool calls'),
+    inferenceOpenAIKey: z.string().nullish().describe('OpenAI API key for inference'),
+    expandTodos: z.boolean().describe('Whether to expand todo lists'),
+    showLineNumbers: z.boolean().describe('Whether to show line numbers in diffs'),
+    showLineNumbersInToolViews: z.boolean().describe('Whether to show line numbers in tool view diffs'),
+    wrapLinesInDiffs: z.boolean().describe('Whether to wrap long lines in diff views'),
+    diffStyle: z.enum(['unified', 'split']).describe('Diff view style (split is web-only)'),
+    analyticsOptOut: z.boolean().describe('Whether to opt out of anonymous analytics'),
+    experiments: z.boolean().describe('Whether to enable experimental features'),
+    alwaysShowContextSize: z.boolean().describe('Always show context size in agent input'),
+    agentInputEnterToSend: z.boolean().describe('Whether pressing Enter submits/sends in the agent input (web)'),
+    avatarStyle: z.string().describe('Avatar display style'),
+    showFlavorIcons: z.boolean().describe('Whether to show AI provider icons in avatars'),
+    userMessageBubbleColor: z.string().describe('User message bubble color preset'),
+    sessionStatusBarDisplay: z.enum(SESSION_STATUS_BAR_DISPLAY_MODES).describe('Whether/where to show the branch, model, effort, and context status bar'),
+    usageLimitShowRemaining: z.boolean().describe('Show plan rate limits as quota remaining instead of quota used'),
+
+    // Drives the archive-visibility toggle: it hides archived sessions, not
+    // merely disconnected ones. The key keeps its original name because these
+    // settings sync between devices and app versions field by field, with no
+    // rename migration to carry an old key across.
+    hideInactiveSessions: z.boolean().describe('Hide archived sessions in the main list'),
+    sortSessionsByActivity: z.boolean().describe('Sort the session list by last activity instead of creation date'),
+    expResumeSession: z.boolean().describe('Enable experimental session resume feature'),
+    fileDiffsSidebar: z.boolean().describe('Show the file diffs sidebar next to the chat on desktop'),
+    groupToolCalls: z.boolean().describe('Collapse consecutive tool calls into grouped containers in chat'),
+    compactToolCalls: z.boolean().describe('Render non-interactive tool calls as compact one-line rows'),
+    expImageUpload: z.boolean().describe('Enable experimental image upload in chat'),
+    reviewPromptAnswered: z.boolean().describe('Whether the review prompt has been answered'),
+    reviewPromptLikedApp: z.boolean().nullish().describe('Whether user liked the app when asked'),
+    voiceAssistantLanguage: z.string().nullable().describe('Preferred language for voice assistant (null for auto-detect)'),
+    voiceCustomAgentId: z.string().nullable().describe('Custom ElevenLabs agent ID (null to use Happy default)'),
+    voiceBypassToken: z.boolean().describe('Bypass Happy server token and connect directly to ElevenLabs (requires custom agent ID)'),
+    preferredLanguage: z.string().nullable().describe('Preferred UI language (null for auto-detect from device locale)'),
+    recentMachinePaths: z.array(z.object({
+        machineId: z.string(),
+        path: z.string()
+    })).describe('Last 10 machine-path combinations, ordered by most recent first'),
+    lastUsedAgent: z.string().nullable().describe('Last selected agent type for new sessions'),
+    lastUsedPermissionMode: z.string().nullable().describe('Last selected permission mode for new sessions'),
+    lastUsedModelMode: z.string().nullable().describe('Last selected model mode for new sessions'),
+    agentDefaultOverrides: AgentDefaultOverridesSchema.describe('User-selected agent defaults. Missing values use code defaults and are not sent as agent metadata.'),
+    // Dismissed CLI warning banners (supports both per-machine and global dismissal)
+    dismissedCLIWarnings: z.object({
+        perMachine: z.record(z.string(), z.object({
+            claude: z.boolean().optional(),
+            codex: z.boolean().optional(),
+            gemini: z.boolean().optional(),
+            openclaw: z.boolean().optional(),
+        })).default({}),
+        global: z.object({
+            claude: z.boolean().optional(),
+            codex: z.boolean().optional(),
+            gemini: z.boolean().optional(),
+            openclaw: z.boolean().optional(),
+        }).default({}),
+    }).default({ perMachine: {}, global: {} }).describe('Tracks which CLI installation warnings user has dismissed (per-machine or globally)'),
+});
+
+//
+// NOTE: Settings must be a flat object with no to minimal nesting, one field == one setting,
+// you can name them with a prefix if you want to group them, but don't nest them.
+// You can nest if value is a single value (like image with url and width and height)
+// Settings are always merged with defaults and field by field.
+//
+// This structure must be forward and backward compatible. Meaning that some versions of the app
+// could be missing some fields or have a new fields. Everything must be preserved and client must
+// only touch the fields it knows about.
+//
+
+const SettingsSchemaPartial = SettingsSchema.partial();
+
+export type Settings = z.infer<typeof SettingsSchema>;
+
+//
+// Defaults
+//
+
+export const settingsDefaults: Settings = {
+    schemaVersion: SUPPORTED_SCHEMA_VERSION,
+    viewInline: false,
+    inferenceOpenAIKey: null,
+    expandTodos: true,
+    showLineNumbers: true,
+    showLineNumbersInToolViews: false,
+    wrapLinesInDiffs: true,
+    diffStyle: 'unified',
+    analyticsOptOut: false,
+    experiments: false,
+    alwaysShowContextSize: false,
+    agentInputEnterToSend: true,
+    avatarStyle: 'brutalist',
+    showFlavorIcons: false,
+    userMessageBubbleColor: DEFAULT_USER_MESSAGE_BUBBLE_COLOR,
+    // Hidden everywhere by default — the context usage indicator is still too
+    // raw to roll out; users can opt back in from appearance settings.
+    sessionStatusBarDisplay: 'hidden',
+    usageLimitShowRemaining: false,
+
+    hideInactiveSessions: false,
+    sortSessionsByActivity: false,
+    expResumeSession: false,
+    fileDiffsSidebar: false,
+    groupToolCalls: false,
+    compactToolCalls: true,
+    expImageUpload: false,
+    reviewPromptAnswered: false,
+    reviewPromptLikedApp: null,
+    voiceAssistantLanguage: null,
+    voiceCustomAgentId: null,
+    voiceBypassToken: false,
+    preferredLanguage: null,
+    recentMachinePaths: [],
+    lastUsedAgent: null,
+    lastUsedPermissionMode: null,
+    lastUsedModelMode: null,
+    agentDefaultOverrides: {},
+    dismissedCLIWarnings: { perMachine: {}, global: {} },
+};
+Object.freeze(settingsDefaults);
+
+export function sanitizeCodexPermissionSettings<T extends Partial<Settings>>(settings: T): T {
+    const result: Partial<Settings> = { ...settings };
+    if (typeof result.lastUsedPermissionMode === 'string') {
+        result.lastUsedPermissionMode = resolveCodexRemotePermissionMode(result.lastUsedPermissionMode);
+    }
+    const codexOverride = result.agentDefaultOverrides?.codex;
+    if (codexOverride?.permissionMode !== undefined) {
+        result.agentDefaultOverrides = {
+            ...result.agentDefaultOverrides,
+            codex: {
+                ...codexOverride,
+                permissionMode: resolveCodexRemotePermissionMode(codexOverride.permissionMode),
+            },
+        };
+    }
+    return result as T;
+}
+
+//
+// Resolving
+//
+
+export function settingsParse(settings: unknown): Settings {
+    // Handle null/undefined/invalid inputs
+    if (!settings || typeof settings !== 'object') {
+        return { ...settingsDefaults };
+    }
+
+    const parsed = SettingsSchemaPartial.safeParse(settings);
+    if (!parsed.success) {
+        // For invalid settings, preserve unknown fields but use defaults for known fields
+        const unknownFields = { ...(settings as any) };
+        // Remove all known schema fields from unknownFields
+        const knownFields = Object.keys(SettingsSchema.shape);
+        knownFields.forEach(key => delete unknownFields[key]);
+        return { ...settingsDefaults, ...unknownFields };
+    }
+
+    // Migration: Convert old 'zh' language code to 'zh-Hans'
+    if (parsed.data.preferredLanguage === 'zh') {
+        console.log('[Settings Migration] Converting language code from "zh" to "zh-Hans"');
+        parsed.data.preferredLanguage = 'zh-Hans';
+    }
+
+    // Codex Plus is Codex-only. Migrate legacy remote permission picks before
+    // they reach MMKV, synced settings, or an older consumer.
+    const sanitizedData = sanitizeCodexPermissionSettings(parsed.data);
+
+    // Merge defaults, parsed settings, and preserve unknown fields
+    const unknownFields = { ...(settings as any) };
+    // Remove known fields from unknownFields to preserve only the unknown ones
+    Object.keys(sanitizedData).forEach(key => delete unknownFields[key]);
+
+    return { ...settingsDefaults, ...sanitizedData, ...unknownFields };
+}
+
+//
+// Applying changes
+// NOTE: May be something more sophisticated here around defaults and merging, but for now this is fine.
+//
+
+export function applySettings(settings: Settings, delta: Partial<Settings>): Settings {
+    // Original behavior: start with settings, apply delta, fill in missing with defaults
+    const result = { ...settings, ...delta };
+
+    // Fill in any missing fields with defaults
+    Object.keys(settingsDefaults).forEach(key => {
+        if (!(key in result)) {
+            (result as any)[key] = (settingsDefaults as any)[key];
+        }
+    });
+
+    return result;
+}
+
+export function settingsToSyncPayload(settings: Settings): Partial<Settings> {
+    const result: Partial<Settings> = sanitizeCodexPermissionSettings(settings);
+    const compactAgentOverrides = Object.fromEntries(
+        Object.entries(settings.agentDefaultOverrides ?? {}).filter(([, value]) => (
+            value && typeof value === 'object' && Object.keys(value).length > 0
+        )),
+    ) as Settings['agentDefaultOverrides'];
+    if (Object.keys(compactAgentOverrides).length === 0) {
+        delete result.agentDefaultOverrides;
+    } else {
+        result.agentDefaultOverrides = sanitizeCodexPermissionSettings({
+            agentDefaultOverrides: compactAgentOverrides,
+        }).agentDefaultOverrides;
+    }
+    return result;
+}

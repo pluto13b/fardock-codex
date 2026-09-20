@@ -1,0 +1,25 @@
+# Temporary HTTP-only vhost used while issuing the first certificate.
+# Replace __CODEX_PLUS_DOMAIN__, install as the target vhost, then reload Nginx.
+
+log_format codex_plus_acme
+  '$remote_addr [$time_local] "$request_method $uri $server_protocol" '
+  '$status $body_bytes_sent';
+
+server {
+  listen 80;
+  listen [::]:80;
+  server_name __CODEX_PLUS_DOMAIN__;
+
+  access_log /www/wwwlogs/__CODEX_PLUS_DOMAIN__.log codex_plus_acme;
+  error_log /www/wwwlogs/__CODEX_PLUS_DOMAIN__.error.log warn;
+
+  location ^~ /.well-known/acme-challenge/ {
+    root /www/wwwroot/__CODEX_PLUS_DOMAIN__;
+    default_type text/plain;
+    try_files $uri =404;
+  }
+
+  location / {
+    return 308 https://__CODEX_PLUS_DOMAIN__$request_uri;
+  }
+}

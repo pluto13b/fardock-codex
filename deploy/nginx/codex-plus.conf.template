@@ -1,0 +1,89 @@
+# This file is included from Nginx's http context.
+# Replace only the domain, full-chain path, and private-key path placeholders.
+
+log_format codex_plus
+  '$remote_addr [$time_local] "$request_method $uri $server_protocol" '
+  '$status $body_bytes_sent';
+
+limit_req_zone $binary_remote_addr zone=codex_plus_http:10m rate=30r/s;
+limit_conn_zone $binary_remote_addr zone=codex_plus_ws:10m;
+
+server {
+  listen 80;
+  listen [::]:80;
+  server_name __CODEX_PLUS_DOMAIN__;
+
+  access_log /www/wwwlogs/__CODEX_PLUS_DOMAIN__.log codex_plus;
+  error_log /www/wwwlogs/__CODEX_PLUS_DOMAIN__.error.log warn;
+
+  location ^~ /.well-known/acme-challenge/ {
+    root /www/wwwroot/__CODEX_PLUS_DOMAIN__;
+    default_type text/plain;
+    try_files $uri =404;
+  }
+
+  location / {
+    return 308 https://__CODEX_PLUS_DOMAIN__$request_uri;
+  }
+}
+
+server {
+  listen 443 ssl;
+  listen [::]:443 ssl;
+  http2 on;
+  server_name __CODEX_PLUS_DOMAIN__;
+
+  ssl_certificate __CODEX_PLUS_FULLCHAIN__;
+  ssl_certificate_key __CODEX_PLUS_PRIVATE_KEY__;
+  ssl_protocols TLSv1.2 TLSv1.3;
+  ssl_session_cache shared:codex_plus_tls:10m;
+  ssl_session_timeout 1d;
+  ssl_session_tickets off;
+
+  access_log /www/wwwlogs/__CODEX_PLUS_DOMAIN__.log codex_plus;
+  error_log /www/wwwlogs/__CODEX_PLUS_DOMAIN__.error.log warn;
+
+  client_max_body_size 1m;
+  send_timeout 75s;
+
+  add_header Strict-Transport-Security "max-age=31536000" always;
+  add_header X-Content-Type-Options "nosniff" always;
+  add_header Referrer-Policy "no-referrer" always;
+  add_header X-Frame-Options "DENY" always;
+
+  location = /api/ws {
+    limit_conn codex_plus_ws 4;
+
+    proxy_pass http://127.0.0.1:8787;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host "__CODEX_PLUS_DOMAIN__";
+    proxy_set_header X-Forwarded-Proto "https";
+    proxy_set_header X-Forwarded-Host "__CODEX_PLUS_DOMAIN__";
+    proxy_set_header X-Forwarded-For "";
+    proxy_connect_timeout 5s;
+    proxy_read_timeout 75s;
+    proxy_send_timeout 75s;
+    proxy_buffering off;
+    proxy_request_buffering off;
+    proxy_cache off;
+  }
+
+  location / {
+    limit_req zone=codex_plus_http burst=60 nodelay;
+
+    proxy_pass http://127.0.0.1:8787;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host "__CODEX_PLUS_DOMAIN__";
+    proxy_set_header X-Forwarded-Proto "https";
+    proxy_set_header X-Forwarded-Host "__CODEX_PLUS_DOMAIN__";
+    proxy_set_header X-Forwarded-For "";
+    proxy_connect_timeout 5s;
+    proxy_read_timeout 30s;
+    proxy_send_timeout 30s;
+    proxy_buffering on;
+    proxy_cache off;
+  }
+}

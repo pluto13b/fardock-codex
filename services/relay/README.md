@@ -1,0 +1,7 @@
+# Codex Plus Relay and D1 Gateway
+
+This package keeps two explicitly selected loopback servers. `r2-local-test` is the original credential-authenticated `RoutedEnvelope` transport spike. `r3-local-test` adds durable Host registration/public identity, monotonic device authorization and revoke tombstones, P-256 socket challenges, the opaque pairing carrier, signed session-frame routing and raw encrypted-envelope routing.
+
+D1 adds a separate `pnpm gateway` production-profile CLI. It requires explicit named configuration, serves the reviewed formal SPA, `/api/ws`, and fixed `/healthz` on one port, and reuses the R3 protocol core without relaxing either local-test factory. The Relay never decrypts application content, performs Codex RPC, stores offline conversations, or creates application acceptance; even R3 receipts stop at `relayed`.
+
+D2 adds runtime-pinned same-origin HTTPS/WSS Browser and Windows Host carriers plus exact trusted-proxy peer/Host/proto checks. D3 adds Web IndexedDB and Windows DPAPI identity/generation persistence around the same Relay contract. This still is not a public deployment release: `/manage` remains D4 and Docker/Compose remains D6. Keep the Gateway on an internal HTTP/WS port behind the configured TLS proxy. See [`docs/RELAY.md`](../../docs/RELAY.md), [`docs/RELAY_R3.md`](../../docs/RELAY_R3.md), and [`docs/DOCKER_GATEWAY.md`](../../docs/DOCKER_GATEWAY.md).

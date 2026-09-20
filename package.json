@@ -1,0 +1,29 @@
+{
+  "name": "codex-plus",
+  "private": true,
+  "packageManager": "pnpm@10.11.0",
+  "scripts": {
+    "postinstall": "node scripts/postinstall.cjs",
+    "brand:assets": "node scripts/generate-brand-assets.cjs",
+    "web": "pnpm --filter @codex-plus/client exec cross-env EXPO_HOME=../../.cache/expo EXPO_PUBLIC_DISABLE_ANALYTICS=1 expo start --web --clear",
+    "web:preview": "pnpm --filter @codex-plus/client exec cross-env APP_ENV=preview EXPO_HOME=../../.cache/expo EXPO_PUBLIC_DISABLE_ANALYTICS=1 EXPO_PUBLIC_CODEX_PLUS_PREVIEW=1 expo start --web --clear",
+    "web:export": "pnpm --filter @codex-plus/client exec cross-env APP_ENV=production EXPO_HOME=../../.cache/expo EXPO_PUBLIC_DISABLE_ANALYTICS=1 expo export --platform web --clear --output-dir ../../.tmp/client-web && node scripts/finalize-web-html.cjs .tmp/client-web && node scripts/verify-web-build.cjs .tmp/client-web production",
+    "web:preview:export": "pnpm --filter @codex-plus/client exec cross-env APP_ENV=preview EXPO_HOME=../../.cache/expo EXPO_PUBLIC_DISABLE_ANALYTICS=1 EXPO_PUBLIC_CODEX_PLUS_PREVIEW=1 expo export --platform web --clear --output-dir ../../.tmp/client-preview && node scripts/finalize-web-html.cjs .tmp/client-preview && node scripts/verify-web-build.cjs .tmp/client-preview preview",
+    "codex-web": "pnpm --filter @codex-plus/web dev:preview",
+    "codex-web:formal": "pnpm --filter @codex-plus/web dev",
+    "codex-web:build": "pnpm --filter @codex-plus/web build && node scripts/verify-dsh-ui-boundary.mjs .tmp/codex-web",
+    "codex-web:preview:build": "pnpm --filter @codex-plus/web build:preview && node scripts/verify-dsh-ui-boundary.mjs .tmp/codex-web-preview preview",
+    "codex-web:preview": "pnpm --filter @codex-plus/web preview:fixture",
+    "mobile-ui:preview": "pnpm --filter @codex-plus/web exec vite --config vite.mobile-preview.config.ts --mode preview",
+    "mobile-ui:build": "pnpm --filter @codex-plus/web exec tsc --project mobile-preview/tsconfig.json && pnpm --filter @codex-plus/web exec vite build --config vite.mobile-preview.config.ts --mode preview && node scripts/verify-dsh-ui-boundary.mjs .tmp/mobile-ui-preview preview",
+    "gateway": "pnpm --filter @codex-plus/relay gateway",
+    "verify:d7-edge": "node scripts/verify-d7-edge.mjs",
+    "windows-bootstrap": "pnpm --filter @codex-plus/windows-agent bootstrap",
+    "windows-production": "pnpm --filter @codex-plus/windows-agent production",
+    "companion:release": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows-companion.ps1",
+    "benchmark:link": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/benchmark-link.ps1",
+    "benchmark:gateway": "pnpm --filter @codex-plus/windows-agent exec tsx benchmarks/public-latency.ts",
+    "typecheck": "pnpm --filter @codex-plus/protocol typecheck && pnpm --filter @codex-plus/e2ee typecheck && pnpm --filter @codex-plus/relay typecheck && pnpm --filter @codex-plus/windows-agent typecheck && pnpm --filter @codex-plus/serve-client typecheck && pnpm --filter @codex-plus/web typecheck && pnpm --filter @slopus/happy-wire build && pnpm --filter @codex-plus/client typecheck",
+    "test": "pnpm --filter @codex-plus/protocol test && pnpm --filter @codex-plus/e2ee test && pnpm --filter @codex-plus/relay test && pnpm --filter @codex-plus/windows-agent test && pnpm --filter @codex-plus/serve-client test && pnpm --filter @codex-plus/web test && pnpm --filter @slopus/happy-wire test && pnpm --filter @codex-plus/client test --run"
+  }
+}

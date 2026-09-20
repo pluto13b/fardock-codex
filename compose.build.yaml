@@ -1,0 +1,7 @@
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VCS_REF: ${CODEX_PLUS_VCS_REF:-local}
